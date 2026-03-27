@@ -1,7 +1,7 @@
 import os
-from openai import OpenAI
-from typing import Any
+
 from dotenv import load_dotenv
+from openai import OpenAI
 from openai.types.chat.chat_completion_message_param import ChatCompletionMessageParam
 
 load_dotenv()
