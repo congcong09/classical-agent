@@ -113,7 +113,7 @@ class BaseMemory(ABC):
         pass
 
     @abstractmethod
-    def clear(self) -> bool:
+    def clear(self):
         pass
 
     @abstractmethod

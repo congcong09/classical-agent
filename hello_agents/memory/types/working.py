@@ -175,6 +175,128 @@ class WorkingMemory(BaseMemory):
     def has_memory(self, memory_id: str) -> bool:
         return any(memory.id == memory_id for memory in self.memories)
 
+    def clear(self):
+        self.memories = []
+        self.memory_heap = []
+        self.max_tokens = 0
+
+    def get_stats(self) -> dict[str, Any]:
+        self._expire_old_memories()
+
+        active_memories = self.memories
+
+        return {
+            "count": len(active_memories),  # 活跃记忆数量
+            "forgotten_count": 0,  # 工作记忆中已遗忘的记忆会被直接删除
+            "total_count": len(self.memories),  # 总记忆数量
+            "current_tokens": self.current_tokens,
+            "max_capacity": self.max_capacity,
+            "max_tokens": self.max_tokens,
+            "max_age_minutes": self.max_age_minutes,
+            "session_duration_minutes": (
+                datetime.now() - self.session_start
+            ).total_seconds()
+            / 60,
+            "avg_importance": (
+                sum(m.importance for m in active_memories) / len(active_memories)
+                if active_memories
+                else 0.0
+            ),
+            "capacity_usage": (
+                len(active_memories) / self.max_capacity
+                if self.max_capacity > 0
+                else 0.0
+            ),
+            "token_usage": (
+                self.current_tokens / self.max_tokens if self.max_tokens > 0 else 0.0
+            ),
+            "memory_type": "working",
+        }
+
+    def get_recent_memory(self, limit: int = 10) -> list[MemoryItem]:
+        sorted_memories = sorted(self.memories, key=lambda m: m.timestamp, reverse=True)
+        return sorted_memories[:limit]
+
+    def get_important(self, limit: int = 10) -> list[MemoryItem]:
+        sorted_memories = sorted(
+            self.memories, key=lambda m: m.importance, reverse=True
+        )
+        return sorted_memories[:limit]
+
+    def get_all(self) -> list[MemoryItem]:
+        return self.memories.copy()
+
+    def get_context_summary(self, max_length: int = 50) -> str:
+        """获取上下文摘要"""
+        if not self.memories:
+            return "No working memories available"
+
+        sorted_memories = sorted(
+            self.memories, key=lambda x: (x.importance, x.timestamp), reverse=True
+        )
+
+        summary_parts = []
+        current_length = 0
+
+        for memory in sorted_memories:
+            content = memory.content
+
+            if current_length + len(content) <= max_length:
+                summary_parts.append(content)
+                current_length += len(content)
+            else:
+                remaining = max_length - current_length
+                if remaining > 50:
+                    summary_parts.append(f"{content[:remaining]}...")
+                break
+
+        return "Working Memory Context:\n" + "\n".join(summary_parts)
+
+    def forget(
+        self,
+        strategy: str = "importance_based",
+        threshold: float = 0.1,
+        max_age_days: int = 1,
+    ) -> int:
+        """工作记忆遗忘机制"""
+        forgotten_count = 0
+        current_time = datetime.now()
+        to_remove = []
+
+        # 现将不符合时间要的移除
+        cutoff_ttl = current_time - timedelta(minutes=self.max_age_minutes)
+        for memory in self.memories:
+            if memory.timestamp < cutoff_ttl:
+                to_remove.append(memory.id)
+
+        # 根据不同的策略处理
+        if strategy == "importance_based":
+            for memory in self.memories:
+                if memory.importance < threshold:
+                    to_remove.append(memory.id)
+        elif strategy == "time_based":
+            cutoff_ttl = current_time - timedelta(hours=max_age_days * 24)
+            for memory in self.memories:
+                if memory.timestamp < cutoff_ttl:
+                    to_remove.append(memory.id)
+        elif strategy == "capacity_based":
+            if len(self.memories) > self.max_capacity:
+                sorted_memories = sorted(
+                    self.memories,
+                    key=lambda m: (m.importance, m.timestamp),
+                    reverse=True,
+                )
+
+                removed_memories = sorted_memories[self.max_capacity :]
+
+                to_remove.extend(m.id for m in removed_memories)
+                
+        for memory_id in to_remove:
+            if self.remove(memory_id):
+                forgotten_count += 1
+
+        return forgotten_count
+
     def _calculate_priority(self, memory_item: MemoryItem):
         priority = memory_item.importance
 
@@ -243,13 +365,6 @@ class WorkingMemory(BaseMemory):
 
             if lowest_memory:
                 self.remove(lowest_memory.id)
-
-        # 这样是不是可以？
-        # last_index = len(self.memory_heap)
-        # _, _, lowest_memory = self.memory_heap[last_index - 1]
-        # if lowest_memory:
-        #     self.remove(lowest_memory.id)
-        #     del self.memory_heap[last_index]
 
     def _update_heap_priority(self, memory: MemoryItem):
         self.memory_heap = []
